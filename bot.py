@@ -8,7 +8,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 # ================= CONFIG =================
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = "8456691972:AAGI_Y5pSZhZL5XXEssm2Yi4CI2pEGzBLEI"
 ADMIN_ID = 5510835149
 DB_PATH = "bot.db"
 # =========================================
