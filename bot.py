@@ -1,3 +1,4 @@
+import time
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -96,40 +97,6 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ BOT IS ALIVE")
 
 
-async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    if is_admin(q.from_user.id):
-        context.user_data["plan"] = q.data
-        await q.message.reply_text("Send User ID:")
-
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    text = update.message.text
-
-    if is_admin(uid) and "plan" in context.user_data:
-        plan = context.user_data.pop("plan")
-        days = 3 if plan == "trial" else 30 if plan == "monthly" else 365
-        exp = datetime.utcnow() + timedelta(days=days)
-
-        con = db()
-        cur = con.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO users VALUES (?,?,?)",
-            (int(text), plan, exp.isoformat()),
-        )
-        con.commit()
-        con.close()
-
-        await update.message.reply_text("✅ Access granted")
-        await context.bot.send_message(
-            int(text), "🎉 Access activated!\nSend /start"
-        )
-        return
-
-
 # ---------------- MAIN ----------------
 init_db()
 
@@ -144,8 +111,12 @@ app = ApplicationBuilder().token(TOKEN).request(request).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("ping", ping))
-app.add_handler(CallbackQueryHandler(inline_handler))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-print("🤖 BOT RUNNING (FINAL FIXED VERSION)")
-app.run_polling()
+print("🤖 BOT RUNNING – KEEP ALIVE MODE")
+
+# 🔥 START POLLING IN BACKGROUND
+app.run_polling(stop_signals=None)
+
+# 🔥 KEEP PROCESS ALIVE FOR FLY.IO
+while True:
+    time.sleep(3600)
