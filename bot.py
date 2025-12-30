@@ -87,24 +87,21 @@ def dashboard():
 
 tg_clients = {}
 
-
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     # ADMIN
     if is_admin(uid):
-        kb = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("🎁 Trial (3 Days)", callback_data="trial")],
-                [InlineKeyboardButton("📅 Monthly", callback_data="monthly")],
-                [InlineKeyboardButton("📆 Yearly", callback_data="yearly")],
-            ]
-        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎁 Trial (3 Days)", callback_data="trial")],
+            [InlineKeyboardButton("📅 Monthly", callback_data="monthly")],
+            [InlineKeyboardButton("📆 Yearly", callback_data="yearly")]
+        ])
         await update.message.reply_text("👑 Admin Panel", reply_markup=kb)
         return
 
-    # NO ACCESS
+    # ❌ NO ACCESS
     if not has_active_plan(uid):
         await update.message.reply_text(
             "🚫 ACCESS DENIED\n\n"
@@ -113,7 +110,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ACCESS BUT NOT LOGGED IN
+    # 🔐 ACCESS BUT NOT LOGGED IN
     if not has_session(uid):
         context.user_data.clear()
         context.user_data["login_step"] = "api_id"
@@ -122,7 +119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ACCESS + LOGGED IN
+    # ✅ ACCESS + LOGGED IN
     await update.message.reply_text(
         "🏠 Dashboard",
         reply_markup=dashboard()
@@ -144,7 +141,18 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text
 
-    # ADMIN PLAN ASSIGN
+    # ================= HARD BLOCK =================
+    # Login না করা পর্যন্ত কোনো feature কাজ করবে না
+    if not has_session(uid):
+        step = context.user_data.get("login_step")
+        if not step:
+            await update.message.reply_text(
+                "🔐 Please complete account setup first.\nSend /start"
+            )
+            return
+    # =================================================
+
+    # ---------- ADMIN PLAN ASSIGN ----------
     if is_admin(uid) and "admin_plan" in context.user_data:
         plan = context.user_data.pop("admin_plan")
         days = 3 if plan == "trial" else 30 if plan == "monthly" else 365
@@ -166,7 +174,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # LOGIN FLOW
+    # ---------- LOGIN FLOW ----------
     step = context.user_data.get("login_step")
 
     if step == "api_id":
@@ -202,7 +210,6 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             phone=context.user_data["phone"],
             code=text.replace(" ", "")
         )
-
         session = client.session.save()
 
         con = db()
@@ -220,13 +227,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # DASHBOARD BUTTONS (only after login)
+    # ---------- DASHBOARD BUTTONS (ONLY AFTER LOGIN) ----------
     if text == "📁 Folders":
-        await update.message.reply_text("📁 Folders module (next step)")
+        await update.message.reply_text("📁 Folders module")
     elif text == "📢 Broadcast":
-        await update.message.reply_text("📢 Broadcast module (next step)")
+        await update.message.reply_text("📢 Broadcast module")
     elif text == "⏰ Scheduler":
-        await update.message.reply_text("⏰ Scheduler module (next step)")
+        await update.message.reply_text("⏰ Scheduler module")
     elif text == "⚙️ Settings":
         await update.message.reply_text("⚙️ Settings")
     elif text == "🚪 Logout":
@@ -249,9 +256,9 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(inline_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-print("🤖 BOT RUNNING (FINAL CLEAN FLOW)")
+print("🤖 BOT RUNNING (STRICT LOGIN ENFORCED)")
 app.run_polling(stop_signals=None)
 
-# KEEP ALIVE FOR FLY.IO
+# KEEP ALIVE (Fly.io)
 while True:
     time.sleep(3600)
