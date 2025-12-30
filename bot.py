@@ -46,6 +46,16 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         session TEXT
     );
+    CREATE TABLE IF NOT EXISTS folders(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        name TEXT
+    );
+    CREATE TABLE IF NOT EXISTS groups(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        folder_id INTEGER,
+        identifier TEXT
+    );
     """)
     con.commit()
     con.close()
@@ -77,15 +87,16 @@ def has_session(uid):
 def dashboard():
     return ReplyKeyboardMarkup(
         [
+            ["📢 Broadcast"],
             ["📁 Folders", "⏰ Scheduler"],
-            ["📢 Broadcast", "⚙️ Settings"],
-            ["🚪 Logout"],
+            ["⚙️ Settings", "🚪 Logout"],
         ],
         resize_keyboard=True,
     )
 
 
 tg_clients = {}
+
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -101,7 +112,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👑 Admin Panel", reply_markup=kb)
         return
 
-    # ❌ NO ACCESS
+    # NO ACCESS
     if not has_active_plan(uid):
         await update.message.reply_text(
             "🚫 ACCESS DENIED\n\n"
@@ -110,7 +121,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 🔐 ACCESS BUT NOT LOGGED IN
+    # ACCESS BUT NOT LOGGED IN
     if not has_session(uid):
         context.user_data.clear()
         context.user_data["login_step"] = "api_id"
@@ -119,9 +130,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ✅ ACCESS + LOGGED IN
+    # LOGGED IN → WELCOME + DASHBOARD
     await update.message.reply_text(
-        "🏠 Dashboard",
+        "👋 Welcome!\n\n"
+        "Your Telegram account is connected successfully.\n"
+        "Choose an option below 👇",
         reply_markup=dashboard()
     )
 
@@ -130,10 +143,81 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    uid = q.from_user.id
+    data = q.data
 
-    if is_admin(q.from_user.id):
-        context.user_data["admin_plan"] = q.data
+    con = db()
+    cur = con.cursor()
+
+    # ADMIN PLAN ASSIGN
+    if is_admin(uid) and data in ["trial", "monthly", "yearly"]:
+        context.user_data["admin_plan"] = data
         await q.message.reply_text("Send User ID:")
+        return
+
+    # ---------- FOLDERS ----------
+    if data == "f_create":
+        context.user_data["folder_step"] = "create"
+        await q.message.reply_text("📂 Send new folder name:")
+        return
+
+    if data == "g_add":
+        cur.execute("SELECT id,name FROM folders WHERE user_id=?", (uid,))
+        rows = cur.fetchall()
+        kb = [[InlineKeyboardButton(n, callback_data=f"addgrp_{i}")] for i, n in rows]
+        await q.message.reply_text("Select folder:", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("addgrp_"):
+        context.user_data["add_group"] = int(data.split("_")[1])
+        await q.message.reply_text(
+            "Send group:\n"
+            "- Chat ID\n"
+            "- @username\n"
+            "- Invite link"
+        )
+        return
+
+    if data == "f_delete":
+        cur.execute("SELECT id,name FROM folders WHERE user_id=?", (uid,))
+        rows = cur.fetchall()
+        kb = [[InlineKeyboardButton(n, callback_data=f"delf_{i}")] for i, n in rows]
+        await q.message.reply_text("Select folder to delete:", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("delf_"):
+        context.user_data["confirm_del"] = int(data.split("_")[1])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Yes", callback_data="del_yes")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="del_no")]
+        ])
+        await q.message.reply_text("⚠️ Confirm delete?", reply_markup=kb)
+        return
+
+    if data == "del_yes":
+        fid = context.user_data.pop("confirm_del")
+        cur.execute("DELETE FROM folders WHERE id=?", (fid,))
+        cur.execute("DELETE FROM groups WHERE folder_id=?", (fid,))
+        con.commit()
+        await q.message.reply_text("✅ Folder deleted")
+        return
+
+    if data == "del_no":
+        context.user_data.pop("confirm_del", None)
+        await q.message.reply_text("❌ Cancelled")
+        return
+
+    con.close()
+
+
+# ---------------- FOLDERS MENU ----------------
+async def folders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Create Folder", callback_data="f_create")],
+        [InlineKeyboardButton("➕ Add Group", callback_data="g_add")],
+        [InlineKeyboardButton("🗑️ Delete Folder", callback_data="f_delete")],
+    ])
+    await update.message.reply_text("📁 Folder Manager", reply_markup=kb)
 
 
 # ---------------- TEXT ROUTER ----------------
@@ -141,18 +225,14 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text
 
-    # ================= HARD BLOCK =================
-    # Login না করা পর্যন্ত কোনো feature কাজ করবে না
+    # HARD BLOCK IF NOT LOGGED IN
     if not has_session(uid):
         step = context.user_data.get("login_step")
         if not step:
-            await update.message.reply_text(
-                "🔐 Please complete account setup first.\nSend /start"
-            )
+            await update.message.reply_text("🔐 Please complete account setup first.\nSend /start")
             return
-    # =================================================
 
-    # ---------- ADMIN PLAN ASSIGN ----------
+    # ADMIN PLAN ASSIGN
     if is_admin(uid) and "admin_plan" in context.user_data:
         plan = context.user_data.pop("admin_plan")
         days = 3 if plan == "trial" else 30 if plan == "monthly" else 365
@@ -174,7 +254,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---------- LOGIN FLOW ----------
+    # LOGIN FLOW
     step = context.user_data.get("login_step")
 
     if step == "api_id":
@@ -227,13 +307,35 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---------- DASHBOARD BUTTONS (ONLY AFTER LOGIN) ----------
+    # CREATE FOLDER
+    if context.user_data.get("folder_step") == "create":
+        con = db()
+        cur = con.cursor()
+        cur.execute("INSERT INTO folders(user_id,name) VALUES (?,?)", (uid, text))
+        con.commit()
+        con.close()
+        context.user_data.pop("folder_step")
+        await update.message.reply_text("✅ Folder created")
+        return
+
+    # ADD GROUP
+    if context.user_data.get("add_group"):
+        fid = context.user_data.pop("add_group")
+        con = db()
+        cur = con.cursor()
+        cur.execute("INSERT INTO groups(folder_id,identifier) VALUES (?,?)", (fid, text))
+        con.commit()
+        con.close()
+        await update.message.reply_text("✅ Group added")
+        return
+
+    # DASHBOARD BUTTONS
     if text == "📁 Folders":
-        await update.message.reply_text("📁 Folders module")
+        await folders_menu(update, context)
     elif text == "📢 Broadcast":
-        await update.message.reply_text("📢 Broadcast module")
+        await update.message.reply_text("📢 Broadcast (next step)")
     elif text == "⏰ Scheduler":
-        await update.message.reply_text("⏰ Scheduler module")
+        await update.message.reply_text("⏰ Scheduler (next step)")
     elif text == "⚙️ Settings":
         await update.message.reply_text("⚙️ Settings")
     elif text == "🚪 Logout":
@@ -256,9 +358,8 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(inline_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-print("🤖 BOT RUNNING (STRICT LOGIN ENFORCED)")
+print("🤖 BOT RUNNING (WELCOME + FULL FOLDERS)")
 app.run_polling(stop_signals=None)
 
-# KEEP ALIVE (Fly.io)
 while True:
     time.sleep(3600)
