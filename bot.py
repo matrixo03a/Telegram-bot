@@ -1,4 +1,3 @@
-import asyncio
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -9,7 +8,6 @@ from telegram import (
     InlineKeyboardMarkup,
 )
 from telegram.ext import (
-    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -19,14 +17,12 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-
 # ================= CONFIG =================
 TOKEN = "8456691972:AAGI_Y5pSZhZL5XXEssm2Yi4CI2pEGzBLEI"
 ADMIN_ID = 5510835149
 DB_PATH = "bot.db"
 # =========================================
+
 
 # ---------------- DATABASE ----------------
 def db():
@@ -36,19 +32,13 @@ def db():
 def init_db():
     con = db()
     cur = con.cursor()
-    cur.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS users(
-            id INTEGER PRIMARY KEY,
-            plan TEXT,
-            expires TEXT
-        );
-        CREATE TABLE IF NOT EXISTS tg_sessions(
-            user_id INTEGER PRIMARY KEY,
-            session TEXT
-        );
-        """
-    )
+    cur.executescript("""
+    CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY,
+        plan TEXT,
+        expires TEXT
+    );
+    """)
     con.commit()
     con.close()
 
@@ -139,45 +129,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text("ℹ️ Message received")
-
 
 # ---------------- MAIN ----------------
-async def main():
-    init_db()
+init_db()
 
-    request = HTTPXRequest(
-        connect_timeout=30,
-        read_timeout=30,
-        write_timeout=30,
-        pool_timeout=30,
-    )
+request = HTTPXRequest(
+    connect_timeout=30,
+    read_timeout=30,
+    write_timeout=30,
+    pool_timeout=30,
+)
 
-    app: Application = (
-        ApplicationBuilder().token(TOKEN).request(request).build()
-    )
+app = ApplicationBuilder().token(TOKEN).request(request).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ping", ping))
-    app.add_handler(CallbackQueryHandler(inline_handler))
-    app.add_handler(MessageHandler(filters.TEXT, text_handler))
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("ping", ping))
+app.add_handler(CallbackQueryHandler(inline_handler))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    print("🤖 BOT STARTED – waiting for updates")
-
-    await app.initialize()
-    await app.start()
-
-    # 🔥 PROOF OF LIFE (admin notification)
-    try:
-        await app.bot.send_message(
-            ADMIN_ID, "✅ Bot started successfully on Fly.io"
-        )
-    except:
-        pass
-
-    await app.bot.initialize()
-    await app.stop()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+print("🤖 BOT RUNNING (FINAL FIXED VERSION)")
+app.run_polling()
