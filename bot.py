@@ -54,7 +54,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS groups(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         folder_id INTEGER,
-        identifier TEXT
+        identifier TEXT UNIQUE
     );
     """)
     con.commit()
@@ -102,7 +102,6 @@ tg_clients = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
-    # ADMIN
     if is_admin(uid):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🎁 Trial (3 Days)", callback_data="trial")],
@@ -112,151 +111,114 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👑 Admin Panel", reply_markup=kb)
         return
 
-    # NO ACCESS
     if not has_active_plan(uid):
         await update.message.reply_text(
-            "🚫 ACCESS DENIED\n\n"
-            "You don't have access to use this bot.\n"
-            "Please contact the owner/admin."
+            "🚫 ACCESS DENIED\n\nPlease contact admin."
         )
         return
 
-    # ACCESS BUT NOT LOGGED IN
     if not has_session(uid):
         context.user_data.clear()
         context.user_data["login_step"] = "api_id"
-        await update.message.reply_text(
-            "🔐 ACCOUNT SETUP\n\nPlease enter your API ID:"
-        )
+        await update.message.reply_text("🔐 Enter API ID:")
         return
 
-    # LOGGED IN → WELCOME + DASHBOARD
     await update.message.reply_text(
-        "👋 Welcome!\n\n"
-        "Your Telegram account is connected successfully.\n"
-        "Choose an option below 👇",
+        "👋 Welcome!\nChoose an option below 👇",
         reply_markup=dashboard()
     )
 
 
-# ---------------- ADMIN INLINE ----------------
+# ---------------- FOLDERS UI ----------------
+async def folders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    con = db()
+    cur = con.cursor()
+
+    # Ensure default folder
+    cur.execute(
+        "SELECT id FROM folders WHERE user_id=? AND name='Default Folder'", (uid,)
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.execute(
+            "INSERT INTO folders(user_id,name) VALUES (?,?)",
+            (uid, "Default Folder")
+        )
+        con.commit()
+
+    con.close()
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Groups", callback_data="add_groups")],
+        [InlineKeyboardButton("🗂 View Groups", callback_data="view_groups")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="back_dashboard")]
+    ])
+
+    await update.message.reply_text(
+        "📁 *Default Folder*\n\n"
+        "➕ ADD GROUPS TO Default Folder\n\n"
+        "Send group details (one or more, separated by comma):\n\n"
+        "• Username: @groupname\n"
+        "• Group ID: -1001234567890\n"
+        "• Multiple: -100111, @group2, 123456\n\n"
+        "Type /cancel to abort",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+
+# ---------------- INLINE HANDLER ----------------
 async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
     data = q.data
 
-    con = db()
-    cur = con.cursor()
-
-    # ADMIN PLAN ASSIGN
-    if is_admin(uid) and data in ["trial", "monthly", "yearly"]:
-        context.user_data["admin_plan"] = data
-        await q.message.reply_text("Send User ID:")
-        return
-
-    # ---------- FOLDERS ----------
-    if data == "f_create":
-        context.user_data["folder_step"] = "create"
-        await q.message.reply_text("📂 Send new folder name:")
-        return
-
-    if data == "g_add":
-        cur.execute("SELECT id,name FROM folders WHERE user_id=?", (uid,))
-        rows = cur.fetchall()
-        kb = [[InlineKeyboardButton(n, callback_data=f"addgrp_{i}")] for i, n in rows]
-        await q.message.reply_text("Select folder:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if data.startswith("addgrp_"):
-        context.user_data["add_group"] = int(data.split("_")[1])
+    if data == "back_dashboard":
         await q.message.reply_text(
-            "Send group:\n"
-            "- Chat ID\n"
-            "- @username\n"
-            "- Invite link"
+            "👋 Welcome back!",
+            reply_markup=dashboard()
         )
         return
 
-    if data == "f_delete":
-        cur.execute("SELECT id,name FROM folders WHERE user_id=?", (uid,))
+    if data == "add_groups":
+        context.user_data["add_groups"] = True
+        await q.message.reply_text("📨 Send group IDs / usernames:")
+        return
+
+    if data == "view_groups":
+        con = db()
+        cur = con.cursor()
+        cur.execute("""
+            SELECT g.identifier FROM groups g
+            JOIN folders f ON f.id = g.folder_id
+            WHERE f.user_id=? AND f.name='Default Folder'
+        """, (uid,))
         rows = cur.fetchall()
-        kb = [[InlineKeyboardButton(n, callback_data=f"delf_{i}")] for i, n in rows]
-        await q.message.reply_text("Select folder to delete:", reply_markup=InlineKeyboardMarkup(kb))
-        return
+        con.close()
 
-    if data.startswith("delf_"):
-        context.user_data["confirm_del"] = int(data.split("_")[1])
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Yes", callback_data="del_yes")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="del_no")]
-        ])
-        await q.message.reply_text("⚠️ Confirm delete?", reply_markup=kb)
-        return
-
-    if data == "del_yes":
-        fid = context.user_data.pop("confirm_del")
-        cur.execute("DELETE FROM folders WHERE id=?", (fid,))
-        cur.execute("DELETE FROM groups WHERE folder_id=?", (fid,))
-        con.commit()
-        await q.message.reply_text("✅ Folder deleted")
-        return
-
-    if data == "del_no":
-        context.user_data.pop("confirm_del", None)
-        await q.message.reply_text("❌ Cancelled")
-        return
-
-    con.close()
-
-
-# ---------------- FOLDERS MENU ----------------
-async def folders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Create Folder", callback_data="f_create")],
-        [InlineKeyboardButton("➕ Add Group", callback_data="g_add")],
-        [InlineKeyboardButton("🗑️ Delete Folder", callback_data="f_delete")],
-    ])
-    await update.message.reply_text("📁 Folder Manager", reply_markup=kb)
+        if not rows:
+            await q.message.reply_text("📭 No groups added yet.")
+        else:
+            txt = "📋 *Groups in Default Folder:*\n\n"
+            txt += "\n".join(f"• `{r[0]}`" for r in rows)
+            await q.message.reply_text(txt, parse_mode="Markdown")
 
 
 # ---------------- TEXT ROUTER ----------------
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    text = update.message.text
+    text = update.message.text.strip()
 
-    # HARD BLOCK IF NOT LOGGED IN
+    # BLOCK before login
     if not has_session(uid):
-        step = context.user_data.get("login_step")
-        if not step:
-            await update.message.reply_text("🔐 Please complete account setup first.\nSend /start")
+        if not context.user_data.get("login_step"):
+            await update.message.reply_text("🔐 Send /start to login")
             return
-
-    # ADMIN PLAN ASSIGN
-    if is_admin(uid) and "admin_plan" in context.user_data:
-        plan = context.user_data.pop("admin_plan")
-        days = 3 if plan == "trial" else 30 if plan == "monthly" else 365
-        exp = datetime.utcnow() + timedelta(days=days)
-
-        con = db()
-        cur = con.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO users VALUES (?,?,?)",
-            (int(text), plan, exp.isoformat())
-        )
-        con.commit()
-        con.close()
-
-        await update.message.reply_text("✅ Access Granted")
-        await context.bot.send_message(
-            int(text),
-            "🎉 ACCESS GRANTED\n\nNow send /start to setup your account."
-        )
-        return
 
     # LOGIN FLOW
     step = context.user_data.get("login_step")
-
     if step == "api_id":
         context.user_data["api_id"] = int(text)
         context.user_data["login_step"] = "api_hash"
@@ -281,7 +243,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_clients[uid] = client
         context.user_data["phone"] = text
         context.user_data["login_step"] = "otp"
-        await update.message.reply_text("Enter OTP (123456):")
+        await update.message.reply_text("Enter OTP:")
         return
 
     if step == "otp":
@@ -302,31 +264,53 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         con.close()
 
         context.user_data.clear()
-        await update.message.reply_text(
-            "✅ ACCOUNT CONNECTED SUCCESSFULLY\n\nSend /start to open dashboard"
+        await update.message.reply_text("✅ Login successful\nSend /start")
+        return
+
+    # ADD GROUPS FLOW
+    if context.user_data.get("add_groups"):
+        if text.lower() == "/cancel":
+            context.user_data.pop("add_groups")
+            await update.message.reply_text("❌ Cancelled")
+            return
+
+        identifiers = [x.strip() for x in text.split(",")]
+        added = skipped = failed = 0
+
+        con = db()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id FROM folders WHERE user_id=? AND name='Default Folder'", (uid,)
         )
-        return
+        folder_id = cur.fetchone()[0]
 
-    # CREATE FOLDER
-    if context.user_data.get("folder_step") == "create":
-        con = db()
-        cur = con.cursor()
-        cur.execute("INSERT INTO folders(user_id,name) VALUES (?,?)", (uid, text))
+        for g in identifiers:
+            try:
+                cur.execute(
+                    "INSERT OR IGNORE INTO groups(folder_id,identifier) VALUES (?,?)",
+                    (folder_id, g)
+                )
+                if cur.rowcount:
+                    added += 1
+                else:
+                    skipped += 1
+            except:
+                failed += 1
+
         con.commit()
         con.close()
-        context.user_data.pop("folder_step")
-        await update.message.reply_text("✅ Folder created")
-        return
+        context.user_data.pop("add_groups")
 
-    # ADD GROUP
-    if context.user_data.get("add_group"):
-        fid = context.user_data.pop("add_group")
-        con = db()
-        cur = con.cursor()
-        cur.execute("INSERT INTO groups(folder_id,identifier) VALUES (?,?)", (fid, text))
-        con.commit()
-        con.close()
-        await update.message.reply_text("✅ Group added")
+        await update.message.reply_text(
+            "✅ *OPERATION COMPLETE*\n\n"
+            f"✅ Added: {added}\n"
+            f"⏩ Skipped (existing): {skipped}\n"
+            f"❌ Failed: {failed}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back", callback_data="back_dashboard")]
+            ])
+        )
         return
 
     # DASHBOARD BUTTONS
@@ -358,7 +342,7 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(inline_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-print("🤖 BOT RUNNING (WELCOME + FULL FOLDERS)")
+print("🤖 BOT RUNNING (Volt-style Folders)")
 app.run_polling(stop_signals=None)
 
 while True:
