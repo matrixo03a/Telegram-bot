@@ -1,3 +1,4 @@
+# modules/folders.py
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from database import db
 
@@ -6,7 +7,7 @@ def get_folder_stats(uid):
     cur = con.cursor()
 
     cur.execute("SELECT COUNT(*) FROM folders WHERE user_id=?", (uid,))
-    folders = cur.fetchone()[0]
+    total_folders = cur.fetchone()[0]
 
     cur.execute("""
         SELECT COUNT(*)
@@ -14,15 +15,16 @@ def get_folder_stats(uid):
         JOIN folders f ON f.id = g.folder_id
         WHERE f.user_id=?
     """, (uid,))
-    groups = cur.fetchone()[0]
+    total_groups = cur.fetchone()[0]
 
     con.close()
-    return folders, groups
+    return total_folders, total_groups
 
 
-async def folders_menu(update, context):
+async def folders_manager_view(update, context):
     uid = update.effective_user.id
 
+    # ensure Default Folder
     con = db()
     cur = con.cursor()
     cur.execute(
@@ -46,7 +48,7 @@ async def folders_menu(update, context):
         "Organize your groups efficiently:"
     )
 
-    kb = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("➕ Create Folder", callback_data="f_create"),
             InlineKeyboardButton("📋 View Folders", callback_data="f_view"),
@@ -67,6 +69,6 @@ async def folders_menu(update, context):
 
     await update.message.reply_text(
         text,
-        reply_markup=kb,
+        reply_markup=keyboard,
         parse_mode="Markdown"
     )
