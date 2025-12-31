@@ -1,133 +1,97 @@
-import time
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
+"""
+MAIN BOT LAUNCHER
+Starts:
+✅ User Forwarder Bot
+✅ Scheduler System
+✅ Admin Bot (auto-start)
+"""
+
+import asyncio
+from telethon import TelegramClient
+
+from config import (
+    BOT_TOKEN,
+    OWNER_API_ID,
+    OWNER_API_HASH,
+    user_sessions
 )
-from telegram.request import HTTPXRequest
 
-from config import TOKEN
-from database import init_db
-from helpers import has_active_plan, has_session
-from modules.dashboard import dashboard
-from modules.folders import folders_manager_view
+from handlers import register_command_handlers
+from callbacks import register_callback_handlers
+from message_flow import register_message_handlers
+from scheduler import start_scheduler
 
-# ---------------- START ----------------
-async def start(update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
+# ============================================
+# START ADMIN BOT (BACKGROUND)
+# ============================================
 
-    if not has_active_plan(uid):
-        await update.message.reply_text("🚫 ACCESS DENIED\nContact admin.")
-        return
+async def start_admin_bot():
+    try:
+        import admin_bot
+        asyncio.create_task(admin_bot.main())
+        print("👑 Admin bot started")
+    except Exception as e:
+        print(f"⚠️ Admin bot failed: {e}")
 
-    if not has_session(uid):
-        context.user_data["login_step"] = "api_id"
-        await update.message.reply_text("🔐 Enter API ID:")
-        return
+# ============================================
+# MAIN USER BOT
+# ============================================
 
-    await update.message.reply_text(
-        "👋 Welcome!\nChoose an option below 👇",
-        reply_markup=dashboard()
+async def main():
+    print("🚀 Starting Auto Forwarder Bot...")
+
+    bot = TelegramClient(
+        "forwarder_bot",
+        OWNER_API_ID,
+        OWNER_API_HASH
     )
 
-# ---------------- TEXT ROUTER ----------------
-async def text_router(update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    text = update.message.text
+    await bot.start(bot_token=BOT_TOKEN)
 
-    if not has_session(uid):
-        await update.message.reply_text("🔐 Send /start")
-        return
+    me = await bot.get_me()
+    print(f"✅ Bot started: @{me.username}")
+    print(f"🆔 Bot ID: {me.id}")
 
-    if text == "📁 Folders":
-        await folders_manager_view(update, context)
-        return
+    # Register handlers
+    register_command_handlers(bot)
+    register_callback_handlers(bot)
+    register_message_handlers(bot)
 
-    if text == "📢 Broadcast":
-        await update.message.reply_text("📢 Broadcast (next step)")
-        return
+    # Start scheduler
+    start_scheduler()
+    print("⏰ Scheduler running")
 
-    if text == "⏰ Scheduler":
-        await update.message.reply_text("⏰ Scheduler (next step)")
-        return
+    # Start admin bot
+    await start_admin_bot()
 
-    if text == "⚙️ Settings":
-        await update.message.reply_text("⚙️ Settings")
-        return
+    print("🎉 SYSTEM READY — PRESS CTRL+C TO STOP")
+    await bot.run_until_disconnected()
 
-    if text == "🚪 Logout":
-        await update.message.reply_text("👋 Logged out")
-        return
+# ============================================
+# CLEAN SHUTDOWN
+# ============================================
 
-# ---------------- INLINE ROUTER ----------------
-async def inline_router(update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
+async def shutdown():
+    print("\n⚠️ Shutting down bot...")
 
-    if data == "back_dashboard":
-        await q.message.reply_text(
-            "⬅️ Back",
-            reply_markup=dashboard()
-        )
-        return
+    for uid, client in list(user_sessions.items()):
+        try:
+            await client.disconnect()
+            print(f"🔌 User session closed: {uid}")
+        except:
+            pass
 
-    if data == "close":
-        await q.message.delete()
-        return
+    print("✅ Shutdown complete")
 
-    if data == "f_create":
-        context.user_data["folder_step"] = "create"
-        await q.message.reply_text("Send folder name to create:")
-        return
+# ============================================
+# ENTRY POINT
+# ============================================
 
-    if data == "f_view":
-        await q.message.reply_text("📋 View folders (next step)")
-        return
-
-    if data == "f_rename":
-        await q.message.reply_text("✏️ Rename folder (next step)")
-        return
-
-    if data == "f_delete":
-        await q.message.reply_text("🗑️ Delete folder (next step)")
-        return
-
-    if data == "g_move":
-        await q.message.reply_text("🔁 Move groups (next step)")
-        return
-
-    if data == "g_add":
-        context.user_data["add_group"] = True
-        await q.message.reply_text(
-            "Send group details (comma separated):\n"
-            "- @username\n"
-            "- -100xxxx\n"
-            "- https://t.me/..."
-        )
-        return
-
-# ---------------- INIT ----------------
-init_db()
-
-request = HTTPXRequest(
-    connect_timeout=30,
-    read_timeout=30,
-    write_timeout=30,
-    pool_timeout=30,
-)
-
-app = ApplicationBuilder().token(TOKEN).request(request).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
-app.add_handler(CallbackQueryHandler(inline_router))
-
-print("🤖 BOT RUNNING (Folders Manager WORKING)")
-app.run_polling(stop_signals=None)
-
-while True:
-    time.sleep(3600)
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        asyncio.run(shutdown())
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        asyncio.run(shutdown())
