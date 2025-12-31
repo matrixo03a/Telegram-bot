@@ -84,6 +84,25 @@ def has_session(uid):
     return bool(r)
 
 
+def get_folder_stats(uid):
+    con = db()
+    cur = con.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM folders WHERE user_id=?", (uid,))
+    total_folders = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM groups g
+        JOIN folders f ON f.id = g.folder_id
+        WHERE f.user_id=?
+    """, (uid,))
+    total_groups = cur.fetchone()[0]
+
+    con.close()
+    return total_folders, total_groups
+
+
 def dashboard():
     return ReplyKeyboardMarkup(
         [
@@ -126,34 +145,61 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---------------- FOLDERS MENU ----------------
-async def folders_menu(update, context):
+# ---------------- FOLDERS MANAGER ----------------
+async def folders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+
     con = db()
     cur = con.cursor()
-
-    # default folder
-    cur.execute("SELECT id FROM folders WHERE user_id=? AND name='Default Folder'", (uid,))
+    cur.execute(
+        "SELECT id FROM folders WHERE user_id=? AND name='Default Folder'",
+        (uid,)
+    )
     if not cur.fetchone():
-        cur.execute("INSERT INTO folders(user_id,name) VALUES (?,?)", (uid, "Default Folder"))
+        cur.execute(
+            "INSERT INTO folders(user_id,name) VALUES (?,?)",
+            (uid, "Default Folder")
+        )
         con.commit()
-
     con.close()
 
+    total_folders, total_groups = get_folder_stats(uid)
+
+    text = (
+        "📁 *FOLDERS MANAGER*\n\n"
+        f"📊 Total Folders: *{total_folders}*\n"
+        f"📂 Total Groups: *{total_groups}*\n\n"
+        "Organize your groups efficiently:"
+    )
+
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Create Folder", callback_data="f_create")],
-        [InlineKeyboardButton("➕ Add Group", callback_data="g_add")],
-        [InlineKeyboardButton("📋 View Groups", callback_data="g_view")],
-        [InlineKeyboardButton("❌ Remove Group", callback_data="g_remove")],
-        [InlineKeyboardButton("🗑️ Delete Folder", callback_data="f_delete")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="back_dashboard")]
+        [
+            InlineKeyboardButton("➕ Create Folder", callback_data="f_create"),
+            InlineKeyboardButton("📋 View Folders", callback_data="f_view"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Rename Folder", callback_data="f_rename"),
+            InlineKeyboardButton("🗑️ Delete Folder", callback_data="f_delete"),
+        ],
+        [
+            InlineKeyboardButton("🔁 Move Groups", callback_data="g_move"),
+            InlineKeyboardButton("➕ Add Groups", callback_data="g_add"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="back_dashboard"),
+            InlineKeyboardButton("❌ Close", callback_data="close"),
+        ],
     ])
 
-    await update.message.reply_text("📁 Folder Manager", reply_markup=kb)
+    await update.message.reply_text(
+        text,
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
 
 
 # ---------------- INLINE HANDLER ----------------
-async def inline_handler(update, context):
+async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
@@ -163,9 +209,13 @@ async def inline_handler(update, context):
         await q.message.reply_text("👋 Back to menu", reply_markup=dashboard())
         return
 
+    if data == "close":
+        await q.message.delete()
+        return
+
     if data == "f_create":
         context.user_data["folder_step"] = "create"
-        await q.message.reply_text("📂 Send new folder name:")
+        await q.message.reply_text("Send folder name to create:")
         return
 
     if data == "g_add":
@@ -176,50 +226,9 @@ async def inline_handler(update, context):
         )
         return
 
-    if data == "g_view":
-        con = db()
-        cur = con.cursor()
-        cur.execute("""
-            SELECT g.identifier FROM groups g
-            JOIN folders f ON f.id=g.folder_id
-            WHERE f.user_id=? AND f.name='Default Folder'
-        """, (uid,))
-        rows = cur.fetchall()
-        con.close()
-
-        if not rows:
-            await q.message.reply_text("📭 No groups yet.")
-        else:
-            txt = "📋 Groups:\n\n" + "\n".join(f"• {r[0]}" for r in rows)
-            await q.message.reply_text(txt)
-        return
-
-    if data == "f_delete":
-        context.user_data["confirm_del"] = True
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Yes", callback_data="del_yes")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="del_no")]
-        ])
-        await q.message.reply_text("⚠️ Delete Default Folder?", reply_markup=kb)
-        return
-
-    if data == "del_yes":
-        con = db()
-        cur = con.cursor()
-        cur.execute("DELETE FROM folders WHERE user_id=?", (uid,))
-        cur.execute("DELETE FROM groups")
-        con.commit()
-        con.close()
-        await q.message.reply_text("🗑️ Folder deleted")
-        return
-
-    if data == "del_no":
-        await q.message.reply_text("❌ Cancelled")
-        return
-
 
 # ---------------- ROUTER ----------------
-async def router(update, context):
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text.strip()
 
@@ -228,6 +237,7 @@ async def router(update, context):
         return
 
     step = context.user_data.get("login_step")
+
     if step == "api_id":
         context.user_data["api_id"] = int(text)
         context.user_data["login_step"] = "api_hash"
@@ -241,9 +251,11 @@ async def router(update, context):
         return
 
     if step == "phone":
-        client = TelegramClient(StringSession(),
+        client = TelegramClient(
+            StringSession(),
             context.user_data["api_id"],
-            context.user_data["api_hash"])
+            context.user_data["api_hash"]
+        )
         await client.connect()
         await client.send_code_request(text)
         tg_clients[uid] = client
@@ -275,19 +287,24 @@ async def router(update, context):
         con.commit()
         con.close()
         context.user_data.pop("folder_step")
-        await update.message.reply_text("✅ Folder created")
+
+        await update.message.reply_text("📁 Folder created")
+        await update.message.reply_text("Send: folder_id message")
         return
 
     if context.user_data.get("add_group"):
         identifiers = [x.strip() for x in text.split(",")]
-        added = skipped = 0
         con = db()
         cur = con.cursor()
         cur.execute("SELECT id FROM folders WHERE user_id=? AND name='Default Folder'", (uid,))
         folder_id = cur.fetchone()[0]
 
+        added = skipped = 0
         for g in identifiers:
-            cur.execute("INSERT OR IGNORE INTO groups(folder_id,identifier) VALUES (?,?)", (folder_id, g))
+            cur.execute(
+                "INSERT OR IGNORE INTO groups(folder_id,identifier) VALUES (?,?)",
+                (folder_id, g)
+            )
             if cur.rowcount:
                 added += 1
             else:
@@ -305,9 +322,9 @@ async def router(update, context):
     if text == "📁 Folders":
         await folders_menu(update, context)
     elif text == "📢 Broadcast":
-        await update.message.reply_text("📢 Broadcast (next)")
+        await update.message.reply_text("📢 Broadcast (next step)")
     elif text == "⏰ Scheduler":
-        await update.message.reply_text("⏰ Scheduler (next)")
+        await update.message.reply_text("⏰ Scheduler (next step)")
     elif text == "⚙️ Settings":
         await update.message.reply_text("⚙️ Settings")
     elif text == "🚪 Logout":
@@ -330,7 +347,7 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(inline_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-print("🤖 BOT RUNNING (FINAL FOLDERS UX)")
+print("🤖 BOT RUNNING (FOLDERS MANAGER READY)")
 app.run_polling(stop_signals=None)
 
 while True:
