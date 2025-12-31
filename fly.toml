@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for telegram-bot-afddta on 2025-12-30T17:13:35Z
+# fly.toml app configuration file generated for telegram-bot-titan on 2025-12-31T11:18:56Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'telegram-bot-afddta'
-primary_region = 'sin'
+app = 'telegram-bot-titan'
+primary_region = 'iad'
 
 [build]
 
